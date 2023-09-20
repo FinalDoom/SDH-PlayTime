@@ -86,4 +86,11 @@ export const TableCSS = {
     table__row_not_correct: {
         backgroundColor: '#4d0000',
     } as CSSProperties,
+
+    table_col: {
+        padding: '0',
+        textAlign: 'center',
+        display: 'grid',
+        gridGap: '10px',
+    } as CSSProperties,
 }

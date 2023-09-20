@@ -1,7 +1,3 @@
-import { VFC, useEffect, useState } from 'react'
-import { PageWrapper } from '../components/PageWrapper'
-import { useLocator } from '../locator'
-import { GameWithTime } from '../app/model'
 import {
     ButtonItem,
     Dropdown,
@@ -10,11 +6,17 @@ import {
     PanelSection,
     TextField,
 } from 'decky-frontend-lib'
+import lunr, { Token } from 'lunr'
+import { VFC, useEffect, useState } from 'react'
+import { FaSearch } from 'react-icons/fa'
 import { humanReadableTime } from '../app/formatters'
-import { TableCSS } from '../styles'
-import { navigateBack } from './navigation'
+import { GameWithTime } from '../app/model'
 import { excludeApps } from '../app/time-manipulation'
+import { PageWrapper } from '../components/PageWrapper'
+import { useLocator } from '../locator'
+import { TableCSS } from '../styles'
 import { ifNull, map } from '../utils'
+import { navigateBack } from './navigation'
 
 interface TableRowsProps {
     appId: string | undefined
@@ -28,12 +30,48 @@ export const ManuallyAdjustTimePage: VFC = () => {
     const [gameWithTimeByAppId, setGameWithTimeByAppId] = useState<
         Map<string, GameWithTime>
     >(new Map())
+    const [gameSearchIdx, setGameSearchIdx] = useState<ReturnType<typeof lunr>>()
+    const [gameOptionsFilter, setGameOptionsFilter] = useState<
+        (it: GameWithTime) => boolean
+    >(() => (_: GameWithTime) => true)
+    const [gameOptions, setGameOptions] = useState<DropdownOption[]>([])
     const [tableRows, setTableRows] = useState<TableRowsProps[]>([])
+
+    useEffect(() => {
+        setGameOptions(
+            Array.from(gameWithTimeByAppId.values())
+                .filter(gameOptionsFilter)
+                .map((it) => {
+                    return {
+                        data: it.game.id,
+                        label: it.game.name,
+                    } as DropdownOption
+                })
+        )
+    }, [gameWithTimeByAppId, gameOptionsFilter])
 
     useEffect(() => {
         setLoading(true)
         timeMigration.fetchPlayTimeForAllGames([excludeApps]).then((playTime) => {
             setGameWithTimeByAppId(playTime)
+            setGameSearchIdx(
+                lunr(function () {
+                    this.ref('id')
+                    this.field('name')
+
+                    // Search names without diacritics
+                    const normalizer = (token: Token): null | Token | Token[] =>
+                        token.update((str) =>
+                            str.normalize('NFD').replace(/\p{Diacritic}/gu, '')
+                        )
+                    lunr.Pipeline.registerFunction(normalizer, 'normalizer')
+                    this.pipeline.before(lunr.stemmer, normalizer)
+
+                    Array.from(playTime.values()).forEach((it) =>
+                        this.add({ id: it.game.id, name: it.game.name })
+                    )
+                })
+            )
             setTableRows([
                 {
                     appId: undefined,
@@ -48,12 +86,18 @@ export const ManuallyAdjustTimePage: VFC = () => {
     if (isLoading) {
         return <PageWrapper>Loading...</PageWrapper>
     }
-    const gameOptions = Array.from(gameWithTimeByAppId.values()).map((it) => {
-        return {
-            data: it.game.id,
-            label: it.game.name,
-        } as DropdownOption
-    })
+
+    const onSearchChange = (index: number, search: string) => {
+        const searchPattern = search.includes('*')
+            ? search
+            : // Add wildcards to every term for "normal" default searching
+              `*${search.split('\\s+').join('* *')}*`
+        const matchingAppIds = new Set(
+            gameSearchIdx?.search(searchPattern).map((result) => result.ref)
+        )
+        setGameOptionsFilter(() => (it: GameWithTime) => matchingAppIds.has(it.game.id))
+    }
+
     const onGameChange = (index: number, appId: string) => {
         const newRows = [...tableRows]
         newRows[index].appId = appId
@@ -125,11 +169,39 @@ export const ManuallyAdjustTimePage: VFC = () => {
                                     ...rowCorrectnessClass(row),
                                 }}
                             >
-                                <Dropdown
-                                    rgOptions={gameOptions}
-                                    selectedOption={row.appId}
-                                    onChange={(e) => onGameChange(idx, e.data)}
-                                />
+                                <div
+                                    flow-children="vertical"
+                                    style={{
+                                        gridTemplateRows: '50% 50%',
+                                        ...TableCSS.table_col,
+                                    }}
+                                >
+                                    <div
+                                        flow-children="horizontal"
+                                        style={{
+                                            gridTemplateColumns: '100% 0%',
+                                            ...TableCSS.table__row,
+                                        }}
+                                    >
+                                        <TextField
+                                            onChange={(e) =>
+                                                onSearchChange(idx, e.target.value)
+                                            }
+                                        />
+                                        <FaSearch
+                                            style={{
+                                                position: 'relative',
+                                                left: '-32px',
+                                                top: '12px',
+                                            }}
+                                        />
+                                    </div>
+                                    <Dropdown
+                                        rgOptions={gameOptions}
+                                        selectedOption={row.appId}
+                                        onChange={(e) => onGameChange(idx, e.data)}
+                                    />
+                                </div>
                                 <div>
                                     {map(row.playTimeTrackedSec, (it) =>
                                         humanReadableTime(it)
